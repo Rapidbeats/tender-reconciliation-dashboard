@@ -18,7 +18,7 @@ except ImportError:
     HAS_TKINTER = False
 
 # Import openpyxl for formatting
-from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, numbers
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, Reference
 
@@ -92,7 +92,6 @@ class TenderReconciliationProcessor:
     def read_tender_file(self, file_path: str, tender_name: str) -> Optional[pd.DataFrame]:
         """Read and process a tender file"""
         try:
-            # Try default encoding first; if that fails, fallback
             read_kwargs = dict(
                 skiprows=5,
                 encoding='utf-8',
@@ -165,7 +164,14 @@ class TenderReconciliationProcessor:
             return None
 
     def find_and_remove_netting_items(self, store_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Find items that net off and remove them"""
+        """
+        Find items that net off and remove them.
+
+        Enhancements:
+        - Pair-wise netting (existing)
+        - Multi-entry netting within same Sales_Date and same Tender_Type -> 'Within-Tender-Multiple entries'
+        - Multi-entry cross-tender netting within same Sales_Date -> 'Cross-Tender-Multiple entries'
+        """
         if len(store_df) <= 1:
             total = float(abs(store_df['Store_Response_Entry'].sum())) if len(store_df) == 1 else 0.0
             if total >= 100:
@@ -173,54 +179,107 @@ class TenderReconciliationProcessor:
             else:
                 return pd.DataFrame(), pd.DataFrame()
 
-        store_df = store_df.reset_index(drop=True)
-        items = store_df.copy()
-        items['abs_value'] = items['Store_Response_Entry'].abs()
-        items = items.sort_values('abs_value', ascending=False).reset_index(drop=True)
+        df = store_df.reset_index(drop=True).copy()
+        df['abs_value'] = df['Store_Response_Entry'].abs()
+        df = df.sort_values('abs_value', ascending=False).reset_index(drop=True)
 
-        used_indices: Set[int] = set()
-        netting_pairs = []
+        used_flags = [False] * len(df)
+        netting_records = []
 
-        for i in range(len(items)):
-            if i in used_indices:
+        # Helper to mark indices used
+        def mark_used(indices: List[int]):
+            for idx in indices:
+                used_flags[idx] = True
+
+        # 1) Existing pair-wise greedy netting (largest with next entries)
+        for i in range(len(df)):
+            if used_flags[i]:
                 continue
-
-            item_i = items.iloc[i]
-
-            for j in range(i + 1, len(items)):
-                if j in used_indices:
+            val_i = df.at[i, 'Store_Response_Entry']
+            for j in range(i + 1, len(df)):
+                if used_flags[j]:
                     continue
-
-                item_j = items.iloc[j]
-                combined_variance = abs(item_i['Store_Response_Entry'] + item_j['Store_Response_Entry'])
-
+                val_j = df.at[j, 'Store_Response_Entry']
+                combined_variance = abs(val_i + val_j)
                 if combined_variance < self.netting_off_threshold:
-                    used_indices.add(i)
-                    used_indices.add(j)
-
-                    netting_pairs.append({
-                        'Store_ID': int(item_i['Store_ID']),
-                        'Sales_Date': item_i.get('Sales_Date', ''),
-                        'Tender_Type_1': item_i['Tender_Type'],
-                        'Store_Response_Entry_1': item_i['Store_Response_Entry'],
-                        'Tender_Type_2': item_j['Tender_Type'],
-                        'Store_Response_Entry_2': item_j['Store_Response_Entry'],
+                    # Mark used and record pair
+                    mark_used([i, j])
+                    netting_records.append({
+                        'Store_ID': int(df.at[i, 'Store_ID']),
+                        'Sales_Date': df.at[i].get('Sales_Date', ''),
+                        'Tender_Type_1': df.at[i]['Tender_Type'],
+                        'Store_Response_Entry_1': val_i,
+                        'Tender_Type_2': df.at[j]['Tender_Type'],
+                        'Store_Response_Entry_2': val_j,
                         'Combined_Variance': combined_variance,
-                        'Netting_Type': 'Cross-Tender' if item_i['Tender_Type'] != item_j['Tender_Type'] else 'Within-Tender'
+                        'Netting_Type': 'Cross-Tender' if df.at[i]['Tender_Type'] != df.at[j]['Tender_Type'] else 'Within-Tender',
+                        'Netting_Members': f"{i},{j}"
                     })
                     break
 
-        exceptional_indices = [idx for idx in range(len(items)) if idx not in used_indices]
+        # 2) Multi-entry netting by Sales_Date and Tender (Within-Tender-Multiple entries)
+        if 'Sales_Date' in df.columns:
+            grouped = df[~pd.Series(used_flags)].groupby(['Sales_Date', 'Tender_Type'])
+            for (sales_date, tender_type), grp in grouped:
+                if len(grp) < 2:
+                    continue
+                idxs = grp.index.tolist()
+                values = grp['Store_Response_Entry'].astype(float)
+                group_sum = float(values.sum())
+                if abs(group_sum) < self.netting_off_threshold:
+                    # mark and record group netting
+                    mark_used(idxs)
+                    netting_records.append({
+                        'Store_ID': int(df.at[idxs[0], 'Store_ID']),
+                        'Sales_Date': sales_date,
+                        'Tender_Type_1': tender_type,
+                        'Store_Response_Entry_1': None,
+                        'Tender_Type_2': None,
+                        'Store_Response_Entry_2': None,
+                        'Combined_Variance': abs(group_sum),
+                        'Netting_Type': 'Within-Tender-Multiple entries',
+                        'Netting_Members': ",".join(map(str, idxs)),
+                        'Group_Sum': group_sum
+                    })
 
-        netting_ref_df = pd.DataFrame(netting_pairs) if netting_pairs else pd.DataFrame()
+        # 3) Multi-entry cross-tender netting on same Sales_Date (Cross-Tender-Multiple entries)
+        if 'Sales_Date' in df.columns:
+            grouped_date = df[~pd.Series(used_flags)].groupby(['Sales_Date'])
+            for sales_date, grp in grouped_date:
+                if len(grp) < 2:
+                    continue
+                idxs = grp.index.tolist()
+                values = grp['Store_Response_Entry'].astype(float)
+                group_sum = float(values.sum())
+                if abs(group_sum) < self.netting_off_threshold:
+                    mark_used(idxs)
+                    # Identify if mixed tenders -> cross-tender
+                    tender_types = grp['Tender_Type'].unique().tolist()
+                    netting_records.append({
+                        'Store_ID': int(df.at[idxs[0], 'Store_ID']),
+                        'Sales_Date': sales_date,
+                        'Tender_Type_1': ",".join(tender_types),
+                        'Store_Response_Entry_1': None,
+                        'Tender_Type_2': None,
+                        'Store_Response_Entry_2': None,
+                        'Combined_Variance': abs(group_sum),
+                        'Netting_Type': 'Cross-Tender-Multiple entries' if len(tender_types) > 1 else 'Within-Tender-Multiple entries',
+                        'Netting_Members': ",".join(map(str, idxs)),
+                        'Group_Sum': group_sum
+                    })
 
-        if exceptional_indices:
-            exceptional_df = items.iloc[exceptional_indices].copy()
-            total_variance = float(abs(exceptional_df['Store_Response_Entry'].sum()))
-            # Use tolerance for floating rounding; require >= 100 to be an exception
-            if total_variance >= 100 - 1e-6:
-                if 'abs_value' in exceptional_df.columns:
-                    exceptional_df = exceptional_df.drop('abs_value', axis=1)
+        # Build netting reference DataFrame
+        netting_ref_df = pd.DataFrame(netting_records) if netting_records else pd.DataFrame()
+
+        # Remaining exceptional items = those not used
+        remaining_idxs = [i for i, used in enumerate(used_flags) if not used]
+        if remaining_idxs:
+            exceptional_df = df.loc[remaining_idxs].copy()
+            if 'abs_value' in exceptional_df.columns:
+                exceptional_df = exceptional_df.drop(columns=['abs_value'])
+            # final check: ensure store-level remaining sum >= 100 to be deemed exception
+            total_remaining = float(abs(exceptional_df['Store_Response_Entry'].sum()))
+            if total_remaining >= 100 - 1e-6:
                 return exceptional_df.reset_index(drop=True), netting_ref_df
 
         return pd.DataFrame(), netting_ref_df
@@ -280,8 +339,7 @@ class TenderReconciliationProcessor:
 
         for store_id in exception_store_ids:
             store_all_tenders = combined_data[combined_data['Store_ID'] == store_id].copy()
-
-            # Recompute numeric safety here as well
+            # Ensure numeric safety
             store_all_tenders['Store_Response_Entry'] = pd.to_numeric(store_all_tenders['Store_Response_Entry'], errors='coerce').fillna(0.0)
 
             exceptional_items, netting_ref = self.find_and_remove_netting_items(store_all_tenders)
@@ -289,27 +347,28 @@ class TenderReconciliationProcessor:
             if netting_ref is not None and not netting_ref.empty:
                 all_netting_reference.append(netting_ref)
                 for _, row in netting_ref.iterrows():
-                    tender_type_1 = row['Tender_Type_1']
-                    netting_type = row['Netting_Type']
-                    variance = row['Combined_Variance']
-
-                    if tender_type_1 in self.tender_metrics:
-                        if netting_type == 'Cross-Tender':
-                            self.tender_metrics[tender_type_1]['cross_tender_netting'] += 1
-                        else:
-                            self.tender_metrics[tender_type_1]['within_tender_netting'] += 1
-                        self.tender_metrics[tender_type_1]['total_netting_variance'] += variance
+                    # Update tender_metrics aggregates where possible
+                    tender_type_str = row.get('Tender_Type_1', None)
+                    netting_type = row.get('Netting_Type', '')
+                    variance = float(row.get('Combined_Variance', 0.0) or 0.0)
+                    # If tender_type_str is a comma-separated list, increment metrics for each tender if exists
+                    if tender_type_str:
+                        for tname in str(tender_type_str).split(','):
+                            tname = tname.strip()
+                            if tname in self.tender_metrics:
+                                if 'Cross-Tender' in netting_type or 'Cross-Tender-Multiple' in netting_type:
+                                    self.tender_metrics[tname]['cross_tender_netting'] += 1
+                                else:
+                                    self.tender_metrics[tname]['within_tender_netting'] += 1
+                                self.tender_metrics[tname]['total_netting_variance'] += variance
 
             if exceptional_items is not None and not exceptional_items.empty:
-                # Double-check that exceptional sum meets threshold (protect against float/string issues)
                 total_exc = float(abs(exceptional_items['Store_Response_Entry'].sum()))
                 if total_exc >= 100 - 1e-6:
                     for tender_name in processed_tenders:
                         tender_items = exceptional_items[exceptional_items['Tender_Type'] == tender_name]
-
                         if not tender_items.empty:
                             self.tender_metrics[tender_name]['exception_entries'] += len(tender_items)
-
                             if tender_name not in filtered_exception_data:
                                 filtered_exception_data[tender_name] = []
                             filtered_exception_data[tender_name].append(tender_items)
@@ -328,18 +387,14 @@ class TenderReconciliationProcessor:
         total_auto_updated_responses = combined_data.groupby('Store_ID', as_index=True).size()
 
         summary_data = []
-
         for store_id in exception_store_ids:
             store_all_tenders = combined_data[combined_data['Store_ID'] == store_id].copy()
             exceptional_items, _ = self.find_and_remove_netting_items(store_all_tenders)
 
             if exceptional_items is not None and not exceptional_items.empty:
                 new_total = float(exceptional_items['Store_Response_Entry'].sum())
-
-                # ensure real exception (abs >= 100)
                 if abs(new_total) >= 100 - 1e-6:
                     line_item_count = len(exceptional_items)
-
                     summary_row = {
                         'Store_ID': store_id,
                         'Total_Auto-Updated_Responses': int(total_auto_updated_responses.get(store_id, 0)),
@@ -426,7 +481,7 @@ class TenderReconciliationProcessor:
         if not has_data:
             return
 
-        # Format header row (at row 3)
+        # Format header row (at start_row)
         for cell in worksheet[start_row]:
             if cell.value:
                 cell.fill = self.header_fill
@@ -473,11 +528,11 @@ class TenderReconciliationProcessor:
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
     def add_subtotal_row(self, worksheet, header_row: int, data_start_row: int, data_end_row: int):
-        """Add SUBTOTAL function rows IN ROW 2 (above heading)"""
-        # Insert row at position 2
-        worksheet.insert_rows(2)
-
-        subtotal_row = 2
+        """
+        Write SUBTOTAL function row at row 2 (above header) WITHOUT inserting rows,
+        so header remains at header_row (e.g. 3).
+        """
+        subtotal_row = header_row - 1  # row above header (usually 2)
 
         # Identify numeric columns from header
         numeric_cols = []
@@ -488,18 +543,17 @@ class TenderReconciliationProcessor:
                 if any(x in col_header for x in ['response', 'sum', 'variance', 'items', 'entries']):
                     numeric_cols.append((col_letter, col_idx))
 
-        # Add SUBTOTAL function to numeric columns
+        # Add SUBTOTAL function to numeric columns, writing directly into subtotal_row
         for col_letter, col_idx in numeric_cols:
             cell = worksheet[f'{col_letter}{subtotal_row}']
-            # Adjust data range since we inserted a row
-            cell.value = f'=SUBTOTAL(9,{col_letter}{data_start_row + 1}:{col_letter}{data_end_row + 1})'
+            cell.value = f'=SUBTOTAL(9,{col_letter}{data_start_row}:{col_letter}{data_end_row})'
             cell.font = Font(name='Palatino Linotype', bold=True, size=10)
             cell.number_format = '#,##0.00'
             cell.alignment = Alignment(horizontal='right', vertical='center')
             cell.border = self.border
             cell.fill = self.subtotal_fill
 
-        # Add label in first column
+        # Add label in first column of subtotal row
         first_cell = worksheet[f'A{subtotal_row}']
         first_cell.value = 'SUBTOTAL'
         first_cell.font = Font(name='Palatino Linotype', bold=True, size=10)
@@ -509,42 +563,52 @@ class TenderReconciliationProcessor:
     def save_to_excel(self, results: Dict, output_path: str):
         """
         Save results to Excel.
-        NOTE: per request, we DO NOT write 'User_Manual' and 'Tender_Performance' sheets.
+        'User_Manual' and 'Tender_Performance' sheets are intentionally omitted.
+        Header row will be at row 3 and SUBTOTAL formulas will be placed at row 2.
         """
         try:
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                # Save store summary
+                # Store Summary
                 if not results['summary'].empty:
                     results['summary'].to_excel(writer, sheet_name='Store_Summary', index=False, startrow=2)
                     store_summary_ws = writer.sheets['Store_Summary']
-                    self.format_worksheet(store_summary_ws, has_data=True, start_row=3)
-                    data_end_row = len(results['summary']) + 2
-                    self.add_subtotal_row(store_summary_ws, 3, 3, data_end_row)
+                    header_row = 3
+                    data_start = header_row + 1
+                    data_end = data_start + len(results['summary']) - 1 if len(results['summary']) > 0 else data_start
+                    # place subtotals in row 2 (no insertion)
+                    self.add_subtotal_row(store_summary_ws, header_row, data_start, data_end)
+                    self.format_worksheet(store_summary_ws, has_data=True, start_row=header_row)
                 else:
                     pd.DataFrame({"Message": ["No real exceptions found"]}).to_excel(
                         writer, sheet_name='Store_Summary', index=False, startrow=2)
 
-                # Save classification summary
+                # Classification Summary
                 if not results['classification'].empty:
                     results['classification'].to_excel(writer, sheet_name='Classification_Summary', index=False, startrow=2)
                     class_summary_ws = writer.sheets['Classification_Summary']
-                    self.format_worksheet(class_summary_ws, has_data=True, start_row=3)
+                    header_row = 3
+                    data_start = header_row + 1
+                    data_end = data_start + len(results['classification']) - 1 if len(results['classification']) > 0 else data_start
+                    self.add_subtotal_row(class_summary_ws, header_row, data_start, data_end)
+                    self.format_worksheet(class_summary_ws, has_data=True, start_row=header_row)
                 else:
                     pd.DataFrame({"Message": ["No real exceptions found"]}).to_excel(
                         writer, sheet_name='Classification_Summary', index=False, startrow=2)
 
-                # Save netting reference
+                # Netting Reference
                 if not results['netting_reference'].empty:
                     results['netting_reference'].to_excel(writer, sheet_name='Netting_Reference', index=False, startrow=2)
                     netting_ref_ws = writer.sheets['Netting_Reference']
-                    self.format_worksheet(netting_ref_ws, has_data=True, start_row=3)
-                    data_end_row = len(results['netting_reference']) + 2
-                    self.add_subtotal_row(netting_ref_ws, 3, 3, data_end_row)
+                    header_row = 3
+                    data_start = header_row + 1
+                    data_end = data_start + len(results['netting_reference']) - 1 if len(results['netting_reference']) > 0 else data_start
+                    self.add_subtotal_row(netting_ref_ws, header_row, data_start, data_end)
+                    self.format_worksheet(netting_ref_ws, has_data=True, start_row=header_row)
                 else:
                     pd.DataFrame({"Message": ["No netting detected"]}).to_excel(
                         writer, sheet_name='Netting_Reference', index=False, startrow=2)
 
-                # Save exception sheets (per tender)
+                # Exceptions per tender
                 for tender_name, df in results['exceptions'].items():
                     if df is not None and not df.empty:
                         sheet_name = f"{tender_name}_Exceptions"
@@ -552,9 +616,11 @@ class TenderReconciliationProcessor:
                             sheet_name = sheet_name[:28] + "..."
                         df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=2)
                         exception_ws = writer.sheets[sheet_name]
-                        self.format_worksheet(exception_ws, has_data=True, start_row=3)
-                        data_end_row = len(df) + 2
-                        self.add_subtotal_row(exception_ws, 3, 3, data_end_row)
+                        header_row = 3
+                        data_start = header_row + 1
+                        data_end = data_start + len(df) - 1 if len(df) > 0 else data_start
+                        self.add_subtotal_row(exception_ws, header_row, data_start, data_end)
+                        self.format_worksheet(exception_ws, has_data=True, start_row=header_row)
 
             return True
 
@@ -562,7 +628,7 @@ class TenderReconciliationProcessor:
             return False
 
     def add_tender_performance_chart(self, worksheet, tender_data):
-        """Add performance chart (unused when not writing tender_performance)"""
+        """Add performance chart (kept for completeness; not used when sheet omitted)"""
         try:
             chart = BarChart()
             chart.type = "col"
