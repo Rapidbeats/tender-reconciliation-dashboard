@@ -170,6 +170,8 @@ class TenderReconciliationProcessor:
         - Pair-wise netting (existing)
         - Multi-entry netting within same Sales_Date and same Tender_Type -> 'Within-Tender-Multiple entries'
         - Multi-entry cross-tender netting within same Sales_Date -> 'Cross-Tender-Multiple entries'
+        
+        Updated: Netting_Members now shows actual values with sign (e.g., "+1200.00, -1195.00")
         """
         if len(store_df) <= 1:
             total = float(abs(store_df['Store_Response_Entry'].sum())) if len(store_df) == 1 else 0.0
@@ -194,7 +196,6 @@ class TenderReconciliationProcessor:
         for i in range(len(df)):
             if used_flags[i]:
                 continue
-            # Use iloc for positional indexing to avoid issues
             val_i = float(df.iloc[i]['Store_Response_Entry'])
             for j in range(i + 1, len(df)):
                 if used_flags[j]:
@@ -204,6 +205,8 @@ class TenderReconciliationProcessor:
                 if combined_variance < self.netting_off_threshold:
                     # Mark used and record pair
                     mark_used([i, j])
+                    # Display actual values with sign in Netting_Members
+                    netting_values = f"{val_i:+.2f}, {val_j:+.2f}"
                     netting_records.append({
                         'Store_ID': int(df.iloc[i]['Store_ID']),
                         'Sales_Date': str(df.iloc[i].get('Sales_Date', '')),
@@ -213,7 +216,7 @@ class TenderReconciliationProcessor:
                         'Store_Response_Entry_2': val_j,
                         'Combined_Variance': combined_variance,
                         'Netting_Type': 'Cross-Tender' if df.iloc[i]['Tender_Type'] != df.iloc[j]['Tender_Type'] else 'Within-Tender',
-                        'Netting_Members': f"{i},{j}"
+                        'Netting_Members': netting_values
                     })
                     break
 
@@ -228,6 +231,8 @@ class TenderReconciliationProcessor:
                 if abs(group_sum) < self.netting_off_threshold:
                     # mark and record group netting
                     mark_used(idxs)
+                    # Display actual values with sign in Netting_Members
+                    netting_values = ", ".join([f"{float(df.iloc[idx]['Store_Response_Entry']):+.2f}" for idx in idxs])
                     netting_records.append({
                         'Store_ID': int(df.iloc[idxs[0]]['Store_ID']),
                         'Sales_Date': str(sales_date),
@@ -237,7 +242,7 @@ class TenderReconciliationProcessor:
                         'Store_Response_Entry_2': None,
                         'Combined_Variance': abs(group_sum),
                         'Netting_Type': 'Within-Tender-Multiple entries',
-                        'Netting_Members': ",".join(map(str, idxs)),
+                        'Netting_Members': netting_values,
                         'Group_Sum': group_sum
                     })
 
@@ -253,6 +258,8 @@ class TenderReconciliationProcessor:
                     mark_used(idxs)
                     # Identify if mixed tenders -> cross-tender
                     tender_types = grp['Tender_Type'].unique().tolist()
+                    # Display actual values with sign in Netting_Members
+                    netting_values = ", ".join([f"{float(df.iloc[idx]['Store_Response_Entry']):+.2f}" for idx in idxs])
                     netting_records.append({
                         'Store_ID': int(df.iloc[idxs[0]]['Store_ID']),
                         'Sales_Date': str(sales_date),
@@ -262,7 +269,7 @@ class TenderReconciliationProcessor:
                         'Store_Response_Entry_2': None,
                         'Combined_Variance': abs(group_sum),
                         'Netting_Type': 'Cross-Tender-Multiple entries' if len(tender_types) > 1 else 'Within-Tender-Multiple entries',
-                        'Netting_Members': ",".join(map(str, idxs)),
+                        'Netting_Members': netting_values,
                         'Group_Sum': group_sum
                     })
 
