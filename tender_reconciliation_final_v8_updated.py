@@ -1,4 +1,3 @@
-# tender_reconciliation_final_v8_updated.py
 import pandas as pd
 import numpy as np
 import os
@@ -195,32 +194,32 @@ class TenderReconciliationProcessor:
         for i in range(len(df)):
             if used_flags[i]:
                 continue
-            val_i = df.at[i, 'Store_Response_Entry']
+            # Use iloc for positional indexing to avoid issues
+            val_i = float(df.iloc[i]['Store_Response_Entry'])
             for j in range(i + 1, len(df)):
                 if used_flags[j]:
                     continue
-                val_j = df.at[j, 'Store_Response_Entry']
+                val_j = float(df.iloc[j]['Store_Response_Entry'])
                 combined_variance = abs(val_i + val_j)
                 if combined_variance < self.netting_off_threshold:
                     # Mark used and record pair
                     mark_used([i, j])
                     netting_records.append({
-                        'Store_ID': int(df.at[i, 'Store_ID']),
-                        'Sales_Date': df.at[i].get('Sales_Date', ''),
-                        'Tender_Type_1': df.at[i]['Tender_Type'],
+                        'Store_ID': int(df.iloc[i]['Store_ID']),
+                        'Sales_Date': str(df.iloc[i].get('Sales_Date', '')),
+                        'Tender_Type_1': str(df.iloc[i]['Tender_Type']),
                         'Store_Response_Entry_1': val_i,
-                        'Tender_Type_2': df.at[j]['Tender_Type'],
+                        'Tender_Type_2': str(df.iloc[j]['Tender_Type']),
                         'Store_Response_Entry_2': val_j,
                         'Combined_Variance': combined_variance,
-                        'Netting_Type': 'Cross-Tender' if df.at[i]['Tender_Type'] != df.at[j]['Tender_Type'] else 'Within-Tender',
+                        'Netting_Type': 'Cross-Tender' if df.iloc[i]['Tender_Type'] != df.iloc[j]['Tender_Type'] else 'Within-Tender',
                         'Netting_Members': f"{i},{j}"
                     })
                     break
 
         # 2) Multi-entry netting by Sales_Date and Tender (Within-Tender-Multiple entries)
         if 'Sales_Date' in df.columns:
-            grouped = df[~pd.Series(used_flags)].groupby(['Sales_Date', 'Tender_Type'])
-            for (sales_date, tender_type), grp in grouped:
+            for (sales_date, tender_type), grp in df[~pd.Series(used_flags)].groupby(['Sales_Date', 'Tender_Type']):
                 if len(grp) < 2:
                     continue
                 idxs = grp.index.tolist()
@@ -230,9 +229,9 @@ class TenderReconciliationProcessor:
                     # mark and record group netting
                     mark_used(idxs)
                     netting_records.append({
-                        'Store_ID': int(df.at[idxs[0], 'Store_ID']),
-                        'Sales_Date': sales_date,
-                        'Tender_Type_1': tender_type,
+                        'Store_ID': int(df.iloc[idxs[0]]['Store_ID']),
+                        'Sales_Date': str(sales_date),
+                        'Tender_Type_1': str(tender_type),
                         'Store_Response_Entry_1': None,
                         'Tender_Type_2': None,
                         'Store_Response_Entry_2': None,
@@ -244,8 +243,7 @@ class TenderReconciliationProcessor:
 
         # 3) Multi-entry cross-tender netting on same Sales_Date (Cross-Tender-Multiple entries)
         if 'Sales_Date' in df.columns:
-            grouped_date = df[~pd.Series(used_flags)].groupby(['Sales_Date'])
-            for sales_date, grp in grouped_date:
+            for sales_date, grp in df[~pd.Series(used_flags)].groupby(['Sales_Date']):
                 if len(grp) < 2:
                     continue
                 idxs = grp.index.tolist()
@@ -256,9 +254,9 @@ class TenderReconciliationProcessor:
                     # Identify if mixed tenders -> cross-tender
                     tender_types = grp['Tender_Type'].unique().tolist()
                     netting_records.append({
-                        'Store_ID': int(df.at[idxs[0], 'Store_ID']),
-                        'Sales_Date': sales_date,
-                        'Tender_Type_1': ",".join(tender_types),
+                        'Store_ID': int(df.iloc[idxs[0]]['Store_ID']),
+                        'Sales_Date': str(sales_date),
+                        'Tender_Type_1': ",".join(str(t) for t in tender_types),
                         'Store_Response_Entry_1': None,
                         'Tender_Type_2': None,
                         'Store_Response_Entry_2': None,
@@ -346,7 +344,7 @@ class TenderReconciliationProcessor:
 
             if netting_ref is not None and not netting_ref.empty:
                 all_netting_reference.append(netting_ref)
-                for _, row in netting_ref.iterrows():
+                for idx, row in netting_ref.iterrows():
                     # Update tender_metrics aggregates where possible
                     tender_type_str = row.get('Tender_Type_1', None)
                     netting_type = row.get('Netting_Type', '')
