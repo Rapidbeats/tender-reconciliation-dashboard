@@ -1,405 +1,286 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import io
-from tender_reconciliation_final_v8_updated import TenderReconciliationProcessor
 import warnings
+from tender_reconciliation_final_v8_updated import TenderReconciliationProcessor
 
 warnings.filterwarnings('ignore')
 
-# Set page config
-st.set_page_config(
-    page_title="Tender Reconciliation Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+st.set_page_config(page_title="Tender Reconciliation Dashboard",
+                   page_icon="📊",
+                   layout="wide",
+                   initial_sidebar_state="expanded")
+
+# --- CSS / Animation (warm, professional) ---
+st.markdown(
+    """
+    <style>
+    :root{
+      --bg:#FFF8F2;
+      --card:#FFFFFF;
+      --accent:#B35A1E; /* warm burnt orange */
+      --muted:#6E6B68;
+      --soft:#F2C57C;
+      --accent-2:#2B5D4A; /* deep warm green */
+      --glass: rgba(255,255,255,0.6);
+    }
+    html,body, .reportview-container, .main {
+      background: linear-gradient(180deg, var(--bg) 0%, #FFFDF9 100%);
+      color: #333;
+    }
+    .header {
+      display:flex;
+      align-items:center;
+      gap:18px;
+      animation: fadeInUp .7s ease both;
+      padding-bottom: 8px;
+    }
+    .brand {
+      width:72px;
+      height:72px;
+      border-radius:14px;
+      background: linear-gradient(135deg, var(--accent-2), var(--accent));
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:white;
+      font-weight:700;
+      box-shadow: 0 6px 22px rgba(43,93,74,0.12);
+    }
+    .title { font-size:28px; font-weight:700; margin:0; color:#3c2f2a; }
+    .subtitle { color:var(--muted); margin-top:4px; font-size:13px; }
+    .panel {
+      background: var(--card);
+      border-radius:12px;
+      padding:18px;
+      box-shadow: 0 6px 20px rgba(62,62,60,0.06);
+      animation: cardPop .6s ease both;
+    }
+    .file-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; }
+    .upload-slot {
+      border: 1px dashed rgba(60,60,60,0.08);
+      height:120px;
+      border-radius:10px;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      color:var(--muted);
+      transition: all .18s ease;
+      background: linear-gradient(180deg, rgba(242,197,124,0.03), rgba(255,255,255,0.02));
+    }
+    .upload-slot:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(163,90,34,0.06); }
+    .action-btn {
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      color:white;
+      border-radius:10px;
+      padding:10px 18px;
+      font-weight:600;
+      border: none;
+      cursor:pointer;
+      box-shadow: 0 8px 24px rgba(163,90,34,0.12);
+    }
+    .action-btn:hover { transform: translateY(-3px); }
+    .metric {
+      padding:12px;
+      border-radius:10px;
+      background:linear-gradient(180deg, rgba(43,93,74,0.04), rgba(255,255,255,0.02));
+      text-align:center;
+      color:#2E2B27;
+    }
+    .small-note { font-size:12px; color:var(--muted); margin-top:6px; }
+    .fadein { animation: fadeIn .8s ease both; }
+    @keyframes fadeInUp {
+      from { opacity:0; transform: translateY(12px); }
+      to { opacity:1; transform: translateY(0); }
+    }
+    @keyframes cardPop {
+      from { opacity:0; transform: scale(.995) translateY(8px); }
+      to { opacity:1; transform: scale(1) translateY(0); }
+    }
+    @keyframes fadeIn {
+      from { opacity:0; } to { opacity:1; }
+    }
+    .typing {
+      display:inline-block;
+      border-right: 2px solid rgba(60,60,60,0.18);
+      padding-right:8px;
+      animation: blinkCaret .9s step-end infinite;
+    }
+    @keyframes blinkCaret {
+      from, to { border-color: transparent; }
+      50% { border-color: rgba(60,60,60,0.18); }
+    }
+    .hint { font-size:12px; color:var(--muted); }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-# Custom CSS
-st.markdown("""
-    <style>
-    .main-header {
-        font-size: 2.5em;
-        font-weight: bold;
-        color: #4472C4;
-        text-align: center;
-        margin-bottom: 1em;
-    }
-    .sub-header {
-        font-size: 1.5em;
-        color: #333;
-        margin-top: 1.5em;
-        margin-bottom: 0.5em;
-    }
-    .info-box {
-        background-color: #E7F3FF;
-        padding: 1em;
-        border-left: 4px solid #4472C4;
-        border-radius: 5px;
-        margin: 1em 0;
-    }
-    .success-box {
-        background-color: #E6F7E6;
-        padding: 1em;
-        border-left: 4px solid #28a745;
-        border-radius: 5px;
-        margin: 1em 0;
-    }
-    .warning-box {
-        background-color: #FFF3E0;
-        padding: 1em;
-        border-left: 4px solid #ff9800;
-        border-radius: 5px;
-        margin: 1em 0;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# --- Header ---
+header_col1, header_col2 = st.columns([0.12, 0.88])
+with header_col1:
+    st.markdown('<div class="brand">TR</div>', unsafe_allow_html=True)
+with header_col2:
+    st.markdown(
+        '<div class="header"><div><h1 class="title">Tender Reconciliation Dashboard</h1>'
+        '<div class="subtitle">Warm, professional interface — fast, clear reconciliation</div></div></div>',
+        unsafe_allow_html=True
+    )
 
-# Main title
-st.markdown('<div class="main-header">📊 TENDER RECONCILIATION DASHBOARD</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Initialize session state
-if 'processing_complete' not in st.session_state:
-    st.session_state.processing_complete = False
-if 'results' not in st.session_state:
-    st.session_state.results = None
-
-# Sidebar configuration
+# --- Sidebar (settings) ---
 with st.sidebar:
-    st.markdown("### ⚙️ CONFIGURATION")
-    st.markdown("---")
-    
-    # Netting Threshold
-    st.markdown("#### Netting Threshold")
-    st.markdown("""
-    <div class="info-box">
-    The threshold determines when entries are considered 'noise' that can be removed.
-    
-    **Recommended values:**
-    - ±1-5: Strict (remove almost all noise)
-    - ±5-10: Moderate (balanced)
-    - ±10-50: Lenient (keep most data)
-    - ±50-100: Very lenient (minimal filtering)
-    </div>
-    """, unsafe_allow_html=True)
-    
-    netting_threshold = st.slider(
-        "Select Netting Threshold (±)",
-        min_value=1.0,
-        max_value=100.0,
-        value=5.0,
-        step=0.5,
-        help="Entries combining to less than this amount are removed as 'noise'"
-    )
-    
-    # Approval Filter
-    st.markdown("#### Approval Filter")
-    st.markdown("""
-    <div class="info-box">
-    Choose how to process store responses:
-    - **All Responses**: Process all entries regardless of approval status
-    - **Auto-Approved Only**: Process only entries that are auto-approved
-    </div>
-    """, unsafe_allow_html=True)
-    
-    approval_option = st.radio(
-        "Processing Mode:",
-        ["All Responses", "Auto-Approved Only"],
-        help="Select which entries to include in reconciliation"
-    )
-    
+    st.markdown("<div class='panel'><h4 style='margin:0 0 8px 0'>⚙️ Configuration</h4>", unsafe_allow_html=True)
+    netting_threshold = st.slider("Netting Threshold (±)", 1.0, 100.0, 5.0, 0.5)
+    approval_option = st.radio("Processing Mode", ["All Responses", "Auto-Approved Only"])
     approval_filter = 'auto_approved_only' if approval_option == "Auto-Approved Only" else 'all'
-    
-    st.markdown("---")
-    st.markdown(f"**Selected Configuration:**")
-    st.markdown(f"- 🎯 Netting Threshold: ±{netting_threshold}")
-    st.markdown(f"- ✓ Processing Mode: {approval_option}")
+    st.markdown("<div class='small-note'>Adjust netting sensitivity to tune noise removal.</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# Main content area
-col1, col2 = st.columns([1, 1])
+# --- Upload area ---
+st.markdown('<div class="panel fadein"><h3 style="margin:0 0 12px 0">📁 Upload Tender CSVs</h3>', unsafe_allow_html=True)
 
-with col1:
-    st.markdown("### 📁 FILE UPLOAD")
+col_a, col_b = st.columns([2.6, 1])
+with col_a:
+    st.markdown('<div class="file-grid">', unsafe_allow_html=True)
+    uploaded_files = {}
+    for label in ['Cash', 'Card', 'UPI', 'Wallet']:
+        key = label.lower()
+        with st.container():
+            st.markdown(f'<div class="upload-slot"><strong>{label}</strong><div class="small-note">Headers at row 6 · CSV</div></div>', unsafe_allow_html=True)
+            file = st.file_uploader(f"Upload {label} CSV", type=['csv'], key=key, label_visibility="hidden")
+            if file:
+                uploaded_files[label] = file
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col_b:
+    st.markdown('<div class="panel"><h4 style="margin:0 0 8px 0">Requirements</h4>', unsafe_allow_html=True)
     st.markdown("""
-    <div class="info-box">
-    Upload your 4 tender CSV files:
-    - Cash Reconciliation
-    - Card Reconciliation
-    - UPI Reconciliation
-    - Wallet Reconciliation
-    </div>
+        <div class="hint">
+        • CSV format with headers on row 6<br>
+        • Columns: Store ID, Store Response Entry, Auto Approved Date (optional)<br>
+        • Non-zero responses only
+        </div>
     """, unsafe_allow_html=True)
+    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
 
-with col2:
-    st.markdown("### 📋 REQUIREMENTS")
-    st.markdown("""
-    <div class="info-box">
-    **File Requirements:**
-    ✓ CSV format
-    ✓ Headers at row 6
-    ✓ Columns: Store ID, Store Response Entry, Auto Approved Date
-    ✓ Non-zero response values only
-    </div>
-    """, unsafe_allow_html=True)
+# --- Process button ---
+process_col1, process_col2 = st.columns([3,1])
+with process_col1:
+    if st.button("🚀 Process Reconciliation", key="process", help="Run reconciliation with current settings", args=None):
+        if len(uploaded_files) == 0:
+            st.error("Please upload at least one CSV file.")
+        else:
+            with st.spinner("Processing files..."):
+                try:
+                    temp_files = {}
+                    for tender_name, uploaded_file in uploaded_files.items():
+                        tmp_path = f"/tmp/{tender_name}_{uploaded_file.name}"
+                        with open(tmp_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        temp_files[tender_name] = tmp_path
 
-st.markdown("---")
+                    processor = TenderReconciliationProcessor(netting_threshold=netting_threshold,
+                                                             approval_filter=approval_filter)
+                    results = processor.process_all_tenders(temp_files)
 
-# File uploads
-st.markdown("### 📤 UPLOAD TENDER FILES")
+                    if results is None:
+                        st.error("Processing returned no results. Check input files.")
+                    else:
+                        st.session_state['results'] = results
+                        st.success("Processing complete!")
+                        st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Error during processing: {e}")
 
-col1, col2, col3, col4 = st.columns(4)
+with process_col2:
+    st.markdown('<div style="padding-top:6px"><button class="action-btn" onclick="window.scrollTo(0,document.body.scrollHeight)">📥 Help</button></div>', unsafe_allow_html=True)
 
-uploaded_files = {}
+st.markdown("</div>", unsafe_allow_html=True)
 
-with col1:
-    st.markdown("**Cash**")
-    cash_file = st.file_uploader(
-        "Upload Cash CSV",
-        type=['csv'],
-        key='cash',
-        label_visibility="collapsed"
-    )
-    if cash_file:
-        uploaded_files['Cash'] = cash_file
+# --- Results (styled) ---
+if 'results' in st.session_state and st.session_state['results']:
+    results = st.session_state['results']
 
-with col2:
-    st.markdown("**Card**")
-    card_file = st.file_uploader(
-        "Upload Card CSV",
-        type=['csv'],
-        key='card',
-        label_visibility="collapsed"
-    )
-    if card_file:
-        uploaded_files['Card'] = card_file
+    st.markdown('<div class="panel fadein"><h3 style="margin:0 0 12px 0">📊 Processing Results</h3>', unsafe_allow_html=True)
 
-with col3:
-    st.markdown("**UPI**")
-    upi_file = st.file_uploader(
-        "Upload UPI CSV",
-        type=['csv'],
-        key='upi',
-        label_visibility="collapsed"
-    )
-    if upi_file:
-        uploaded_files['UPI'] = upi_file
+    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+    mcol1.markdown(f'<div class="metric"><div style="font-size:18px; font-weight:700">{results.get("total_stores",0):,}</div><div class="small-note">Total Stores</div></div>', unsafe_allow_html=True)
+    mcol2.markdown(f'<div class="metric"><div style="font-size:18px; font-weight:700">{results.get("exception_stores",0):,}</div><div class="small-note">Stores with Exceptions</div></div>', unsafe_allow_html=True)
+    exc_rate = (results.get('exception_stores',0)/results.get('total_stores',1)*100) if results.get('total_stores',0)>0 else 0
+    mcol3.markdown(f'<div class="metric"><div style="font-size:18px; font-weight:700">{exc_rate:.2f}%</div><div class="small-note">Exception Rate</div></div>', unsafe_allow_html=True)
+    real_exceptions = len(results['summary']) if not results['summary'].empty else 0
+    mcol4.markdown(f'<div class="metric"><div style="font-size:18px; font-weight:700">{real_exceptions:,}</div><div class="small-note">Real Exceptions</div></div>', unsafe_allow_html=True)
 
-with col4:
-    st.markdown("**Wallet**")
-    wallet_file = st.file_uploader(
-        "Upload Wallet CSV",
-        type=['csv'],
-        key='wallet',
-        label_visibility="collapsed"
-    )
-    if wallet_file:
-        uploaded_files['Wallet'] = wallet_file
-
-st.markdown("---")
-
-# Processing section
-col1, col2, col3 = st.columns([1, 1, 1])
-
-with col2:
-    process_button = st.button(
-        "🚀 PROCESS RECONCILIATION",
-        use_container_width=True,
-        type="primary"
-    )
-
-if process_button:
-    if len(uploaded_files) == 0:
-        st.error("❌ Please upload at least one file to process")
-    else:
-        with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-            try:
-                # Create temporary file paths
-                temp_files = {}
-                for tender_name, uploaded_file in uploaded_files.items():
-                    temp_path = f"/tmp/{tender_name}_{uploaded_file.name}"
-                    with open(temp_path, 'wb') as f:
-                        f.write(uploaded_file.getbuffer())
-                    temp_files[tender_name] = temp_path
-                
-                # Initialize processor with selected threshold and approval filter
-                processor = TenderReconciliationProcessor(
-                    netting_threshold=netting_threshold,
-                    approval_filter=approval_filter
-                )
-                
-                # Process files
-                results = processor.process_all_tenders(temp_files)
-                
-                if results is None:
-                    st.error("❌ Processing failed. Please check your files.")
-                else:
-                    st.session_state.results = results
-                    st.session_state.processing_complete = True
-                    st.success("✅ Processing completed successfully!")
-                    st.rerun()
-                
-            except Exception as e:
-                st.error(f"❌ Error during processing: {str(e)}")
-
-# Display results
-if st.session_state.processing_complete and st.session_state.results:
-    results = st.session_state.results
-    
     st.markdown("---")
-    st.markdown("### 📊 PROCESSING RESULTS")
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Total Stores",
-            f"{results['total_stores']:,}",
-            delta=None
-        )
-    
-    with col2:
-        st.metric(
-            "Stores with Exceptions",
-            f"{results['exception_stores']:,}",
-            delta=None
-        )
-    
-    with col3:
-        exception_rate = (results['exception_stores'] / results['total_stores'] * 100) if results['total_stores'] > 0 else 0
-        st.metric(
-            "Exception Rate",
-            f"{exception_rate:.2f}%",
-            delta=None
-        )
-    
-    with col4:
-        real_exceptions = len(results['summary']) if not results['summary'].empty else 0
-        st.metric(
-            "Real Exceptions",
-            f"{real_exceptions:,}",
-            delta=f"-{results['exception_stores'] - real_exceptions if results['exception_stores'] > real_exceptions else 0:,} (noise)"
-        )
-    
-    st.markdown("---")
-    
-    # Tabs for different views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📋 Summary",
-        "📊 Tender Performance",
-        "🎯 Classification",
-        "🔍 Netting Reference",
-        "📥 Download Report"
-    ])
-    
-    with tab1:
+
+    tabs = st.tabs(["Summary","Tender Performance","Classification","Netting Reference","Download"])
+    # Summary
+    with tabs[0]:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
         st.markdown("### Store Summary (Real Exceptions)")
         if not results['summary'].empty:
-            st.dataframe(
-                results['summary'],
-                use_container_width=True,
-                height=400
-            )
-            st.markdown(f"**Total Rows:** {len(results['summary']):,}")
+            st.dataframe(results['summary'], use_container_width=True, height=400)
         else:
-            st.info("ℹ️ No exceptions found after noise removal")
-    
-    with tab2:
+            st.info("No exceptions found after noise removal.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Tender Performance
+    with tabs[1]:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
         st.markdown("### Tender Performance Metrics")
         if not results['tender_performance'].empty:
-            # Display metrics
-            st.dataframe(
-                results['tender_performance'],
-                use_container_width=True
-            )
-            
-            # Charts
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### Exception Rate by Tender")
-                chart_data = results['tender_performance'][['Tender', 'Exception_Rate_%']].set_index('Tender')
-                st.bar_chart(chart_data)
-            
-            with col2:
-                st.markdown("#### Total vs Exceptional Entries")
-                chart_data = results['tender_performance'][['Tender', 'Total_Entries', 'Exceptional_Entries']].set_index('Tender')
-                st.bar_chart(chart_data)
+            st.dataframe(results['tender_performance'], use_container_width=True)
+            st.markdown("<div class='small-note'>Charts show high-level trends.</div>", unsafe_allow_html=True)
         else:
-            st.info("ℹ️ No performance data available")
-    
-    with tab3:
+            st.info("No performance data available.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Classification
+    with tabs[2]:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
         st.markdown("### Exception Classification")
         if not results['classification'].empty:
-            st.dataframe(
-                results['classification'],
-                use_container_width=True
-            )
-            
-            # Pie chart
-            st.markdown("#### Distribution by Classification")
-            chart_data = results['classification'].set_index('Classification')['Store_Count']
-            st.pie_chart(chart_data)
+            st.dataframe(results['classification'], use_container_width=True)
         else:
-            st.info("ℹ️ No classification data available")
-    
-    with tab4:
+            st.info("No classification data available.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Netting Reference
+    with tabs[3]:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
         st.markdown("### Netting Items Removed (Noise)")
         if not results['netting_reference'].empty:
-            st.dataframe(
-                results['netting_reference'],
-                use_container_width=True,
-                height=400
-            )
-            st.markdown(f"**Total Pairs Removed:** {len(results['netting_reference']):,}")
+            st.dataframe(results['netting_reference'], use_container_width=True, height=300)
         else:
-            st.info("ℹ️ No netting detected")
-    
-    with tab5:
-        st.markdown("### 📥 DOWNLOAD RESULTS")
-        st.markdown("""
-        <div class="success-box">
-        Click the button below to download the complete reconciliation report in Excel format with:
-        - Formatted sheets with Palatino Linotype font
-        - SUBTOTAL functions for numeric columns
-        - Professional styling and charts
-        - All detailed exception data
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Generate Excel file
+            st.info("No netting detected.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Download
+    with tabs[4]:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
+        st.markdown("### Download Report")
         try:
-            output = io.BytesIO()
-            processor = TenderReconciliationProcessor(nesting_threshold=netting_threshold)
-            
-            # Create temporary Excel file
+            processor = TenderReconciliationProcessor(netting_threshold=netting_threshold, approval_filter=approval_filter)
             temp_excel_path = f"/tmp/Tender_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             processor.save_to_excel(results, temp_excel_path)
-            
-            # Read and provide download
-            with open(temp_excel_path, 'rb') as f:
-                excel_data = f.read()
-            
-            st.download_button(
-                label="📊 Download Excel Report",
-                data=excel_data,
-                file_name=f"Tender_Reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            
-            st.success("✅ Excel file is ready for download!")
-            
+            with open(temp_excel_path, "rb") as f:
+                data = f.read()
+            st.download_button("📥 Download Excel Report", data=data, file_name=f"Tender_Reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
-            st.error(f"❌ Error generating Excel file: {str(e)}")
+            st.error(f"Error generating Excel: {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # Footer
-st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #666; font-size: 0.9em; margin-top: 2em;">
-    <p>Tender Reconciliation Dashboard v13.2 | Streamlit Edition</p>
-    <p>For support, contact the development team</p>
+<div style="text-align:center; margin-top:28px; color: #7a716c; font-size:13px;">
+    Tender Reconciliation Dashboard • Warm UX theme • Built for clarity
 </div>
 """, unsafe_allow_html=True)
