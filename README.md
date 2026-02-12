@@ -1,4 +1,3 @@
-cat > README.md << 'EOF'
 # 📊 Tender Reconciliation Dashboard
 
 A professional-grade web application for automated tender reconciliation with real-time discrepancy detection and noise removal.
